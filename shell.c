@@ -6,16 +6,16 @@
 
 #define MAX_TOKENS 64
 
-int built_ins(char **vec) {
-  if (strcmp(vec[0], "exit\n") == 0) {
-    free(vec);
-    exit(0);
-  } else if (strcmp(vec[0], "cd\n")) {
-    // change directory chdir
-  }
-
-  return 1;
-}
+// int built_ins(char **vec) {
+//   if (strcmp(vec[0], "exit\n") == 0) {
+//     free(vec);
+//     exit(0);
+//   } else if (strcmp(vec[0], "cd\n")) {
+//     // change directory chdir
+//   }
+//
+//   return 1;
+// }
 
 char *get_input() {
   char *input = NULL;
@@ -110,6 +110,7 @@ int cd_function(char **path) {
   if (path[1] == NULL) {
     fprintf(stderr, "expected argument to \"cd\"\n");
   } else {
+    // char *path[] = {path[1]};
     if (chdir(path[1]) != 0) {
       perror("no such file or directory");
     }
@@ -152,19 +153,14 @@ int batch_mode(int argc, char *argv[]) {
   return 0;
 }
 
-char *builtin_dict[] = {"cd", "exit", "help"};
+char *builtin_dict[] = {"cd", "exit\n", "help\n"};
 
 int run_builtins(char **args) {
 
   for (int i = 0; i < 3; i++) {
     if (strcmp(args[0], builtin_dict[i]) == 0) {
-
-      printf("running built in function args[0] %s\n", args[0]);
-
       return (*builtin_func[i])(args);
     }
-
-    printf("running exevute function args[0] %s\n", args[0]);
   }
   return exevute(args);
 }
