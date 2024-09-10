@@ -2,7 +2,6 @@
 #include <stdlib.h>
 #include <string.h>
 #include <sys/wait.h>
-#include <time.h>
 #include <unistd.h>
 
 #define MAX_TOKENS 64
@@ -34,20 +33,41 @@ char *get_input() {
   return input;
 }
 
-int exevute(char **args, char **path) {
+char **path_list() {
+  char *paths[] = {
+      "/bin/",
+      "/usr/bin/",
+      "/usr/local/bin/",
+  };
+
+  // Allocate memory for the array of strings
+  char **path_dict = malloc(sizeof(paths));
+
+  // Copy each string to the allocated memory
+  for (int i = 0; i < 3; i++) {
+    path_dict[i] =
+        malloc(strlen(paths[i]) + 1); // Allocate memory for each string
+    strcpy(path_dict[i], paths[i]);   // Copy the string
+  }
+
+  return path_dict;
+}
+
+int exevute(char **args) {
   pid_t pid;
   int status;
-
+  char **path = path_list();
   pid = fork();
-
   if (pid == 0) {
     // Child process
-
-    for (int i = 0; i < 2; i++) {
-      perror("error executing");
-      if (execvp(path[i], args) == -1) {
+    for (int i = 0; i < 3; i++) {
+      char *cmd = malloc(strlen(path[i]) + strlen(args[0]) + 1);
+      strcpy(cmd, path[i]);
+      strcat(cmd, args[0]);
+      if (execvp(cmd, args) == -1) {
         perror("error executing");
       }
+      free(cmd);
     }
     exit(EXIT_FAILURE);
   } else {
@@ -85,6 +105,39 @@ char **split_input(char *line) {
   return tokens;
 }
 
+int cd_function(char **path) {
+
+  if (path[1] == NULL) {
+    fprintf(stderr, "expected argument to \"cd\"\n");
+  } else {
+    if (chdir(path[1]) != 0) {
+      perror("no such file or directory");
+    }
+  }
+
+  return 1;
+}
+
+int exit_function() {
+  exit(0);
+  return 0;
+}
+
+int help_function() {
+  printf("Witsshell is a simple shell written in C\n");
+  printf("The following commands are built in:\n");
+  printf("cd\n");
+  printf("exit\n");
+  printf("help\n");
+  return 1;
+}
+
+int (*builtin_func[])(char **) = {
+    &cd_function,
+    &exit_function,
+    &help_function,
+};
+
 int batch_mode(int argc, char *argv[]) {
   if (argc == 2) {
 
@@ -99,26 +152,33 @@ int batch_mode(int argc, char *argv[]) {
   return 0;
 }
 
+char *builtin_dict[] = {"cd", "exit", "help"};
+
+int run_builtins(char **args) {
+
+  for (int i = 0; i < 3; i++) {
+    if (strcmp(args[0], builtin_dict[i]) == 0) {
+
+      printf("running built in function args[0] %s\n", args[0]);
+
+      return (*builtin_func[i])(args);
+    }
+
+    printf("running exevute function args[0] %s\n", args[0]);
+  }
+  return exevute(args);
+}
+
 void interactive_mode() {
   char *input;
   char **args;
   int status = 1;
 
-  char *path_list[] = {
-      "/bin/",
-      "/usr/bin/",
-      "/usr/local/bin/",
-  };
-
   while (status) {
     printf("witsshell> ");
     input = get_input();
-    args = split_input(input);
-    status = exevute(args, path_list);
-
-    for (int i = 0; args[i] != NULL; i++) {
-      printf("args[%d] = %s\n", i, args[i]);
-    }
+    args = split_input(input); // correct args
+    status = run_builtins(args);
 
     free(args);
     free(input);
