@@ -1,20 +1,22 @@
-#include <signal.h>
+#include <fcntl.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <sys/stat.h>
+#include <sys/types.h>
 #include <sys/wait.h>
-#include <time.h>
 #include <unistd.h>
-#define DELIM " \t\r\a"
+
 #define MAX_TOKENS 64
 
+// Function to get input from the user
 char *get_input() {
   char *input = NULL;
   size_t len = 0;
 
   if (getline(&input, &len, stdin) == -1) {
     if (feof(stdin)) {
-      exit(EXIT_SUCCESS); // We recieved an EOF
+      exit(EXIT_SUCCESS); // We received an EOF
     } else {
       perror("readline");
       exit(EXIT_FAILURE);
@@ -24,6 +26,8 @@ char *get_input() {
   return input;
 }
 
+// Function to retrieve the PATH environment variable and split it into
+// directories
 char **path_list() {
   char *path_env = getenv("PATH");
   if (path_env == NULL) {
@@ -31,12 +35,11 @@ char **path_list() {
     path_env = "/bin";
   }
 
-  char *path_copy = strdup(path_env); // Make a copy of the PATH
   char **path_dict = malloc(MAX_TOKENS * sizeof(char *));
   char *token;
   int i = 0;
 
-  token = strtok(path_copy, ":"); // Tokenize the copy
+  token = strtok(path_env, ":");
   while (token != NULL && i < MAX_TOKENS - 1) {
     path_dict[i] = malloc(strlen(token) + 1);
     strcpy(path_dict[i], token);
@@ -45,11 +48,11 @@ char **path_list() {
   }
   path_dict[i] = NULL; // Null-terminate the array
 
-  free(path_copy); // Free the copy after tokenizing
   return path_dict;
 }
 
-int exevute(char **args) {
+// Function to execute a command by searching the directories in the PATH
+int execute(char **args) {
   pid_t pid;
   int status;
   char **path = path_list();
@@ -58,18 +61,16 @@ int exevute(char **args) {
   if (pid == 0) {
     // Child process
     for (int i = 0; path[i] != NULL; i++) {
-
-      char *cmd =
-          malloc(strlen(path[i]) + strlen(args[0]) + 2); // +2 for '/' and '\0'
+      char *cmd = malloc(strlen(path[i]) + strlen(args[0]) + 2);
       sprintf(cmd, "%s/%s", path[i], args[0]);
 
       if (access(cmd, X_OK) == 0) {
         execv(cmd, args);
       }
-
       free(cmd);
     }
-    exit(EXIT_SUCCESS);
+    perror("command not found");
+    exit(EXIT_FAILURE);
   } else {
     // Parent process
     do {
@@ -79,6 +80,7 @@ int exevute(char **args) {
   return 1;
 }
 
+// Function to split the input line into tokens
 char **split_input(char *line) {
   char **tokens = malloc(MAX_TOKENS * sizeof(char *));
   char *token;
@@ -90,7 +92,7 @@ char **split_input(char *line) {
   }
 
   // Use strsep to tokenize the input based on space (" ")
-  while ((token = strsep(&line, DELIM)) != NULL) {
+  while ((token = strsep(&line, " ")) != NULL) {
     if (*token == '\0') { // Skip empty tokens
       continue;
     }
@@ -105,16 +107,15 @@ char **split_input(char *line) {
   return tokens;
 }
 
-int cd_function(char **path) {
-
-  if (path[1] == NULL) {
+// Built-in functions
+int cd_function(char **args) {
+  if (args[1] == NULL) {
     fprintf(stderr, "expected argument to \"cd\"\n");
   } else {
-    if (chdir(path[1]) != 0) {
-      perror("no such file or directory\n");
+    if (chdir(args[1]) != 0) {
+      perror("no such file or directory");
     }
   }
-
   return 1;
 }
 
@@ -125,7 +126,7 @@ int exit_function() {
 
 int help_function() {
   printf("Witsshell is a simple shell written in C\n");
-  printf("The following commands are built in:\n");
+  printf("The following commands are built-in:\n");
   printf("cd\n");
   printf("exit\n");
   printf("help\n");
@@ -138,32 +139,31 @@ int (*builtin_func[])(char **) = {
     &help_function,
 };
 
-int batch_mode(int argc, char *argv[]) {
-  if (argc == 2) {
-
-    printf("the batch file is : %s \n", argv[1]);
-    return 0;
-
-  } else if (argc > 2) {
-
-    printf("Throw an error because we only require one input\n");
-    return 0;
-  }
-  return 0;
-}
-
 char *builtin_dict[] = {"cd", "exit", "help"};
 
+// Function to run built-in commands or external executables
 int run_builtins(char **args) {
-
   for (int i = 0; i < 3; i++) {
     if (strcmp(args[0], builtin_dict[i]) == 0) {
       return (*builtin_func[i])(args);
     }
   }
-  return exevute(args);
+  return execute(args);
 }
 
+// Batch mode handler
+int batch_mode(int argc, char *argv[]) {
+  if (argc == 2) {
+    printf("Batch file is: %s\n", argv[1]);
+    return 0;
+  } else if (argc > 2) {
+    printf("Error: only one batch file is required\n");
+    return 0;
+  }
+  return 0;
+}
+
+// Interactive mode for the shell
 void interactive_mode() {
   char *input;
   char **args;
@@ -171,53 +171,17 @@ void interactive_mode() {
 
   while (status) {
     printf("witsshell> ");
-    fflush(stdout);
     input = get_input();
+    args = split_input(input); // correct args
+    status = run_builtins(args);
 
-    // Split input by '\n' to handle multiple commands in a single input
-    char *command = strtok(input, "\n");
-    while (command != NULL) {
-      // Trim leading/trailing whitespace if necessary
-      while (*command == ' ')
-        command++; // Skip leading spaces
-      char *end = command + strlen(command) - 1;
-      while (end > command && *end == ' ')
-        end--;           // Skip trailing spaces
-      *(end + 1) = '\0'; // Null-terminate the trimmed string
-
-      if (strlen(command) > 0) {
-        args = split_input(command); // Split the individual command
-        status = run_builtins(args); // Execute the command
-
-        free(args);
-      }
-      command = strtok(NULL, "\n"); // Move to the next command
-    }
-
+    free(args);
     free(input);
   }
 }
 
-// void interactive_mode() {
-//   char *input;
-//   char **args;
-//   int status = 1;
-//
-//   while (status) {
-//     printf("witsshell> ");
-//     input = get_input();
-//     args = split_input(input); // corr
-//     status = run_builtins(args);
-//
-//     free(args);
-//     free(input);
-//   }
-// }
-
-/* =============================== main ===================================*/
-
+// Main function
 int main(int argc, char *argv[]) {
-
   batch_mode(argc, argv);
   interactive_mode();
 
