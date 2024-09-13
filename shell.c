@@ -5,7 +5,7 @@
 #include <sys/wait.h>
 #include <time.h>
 #include <unistd.h>
-#define DELIM " \t\r\a"
+#define DELIM " \t\n\r\a"
 #define MAX_TOKENS 64
 
 char *get_input() {
@@ -58,9 +58,8 @@ int exevute(char **args) {
   if (pid == 0) {
     // Child process
     for (int i = 0; path[i] != NULL; i++) {
-
       char *cmd =
-          malloc(strlen(path[i]) + strlen(args[0]) + 2); // +2 for '/' and '\0'
+          malloc(strlen(path[i]) + strlen(args[0]) + 2); // +2 for '/' and
       sprintf(cmd, "%s/%s", path[i], args[0]);
 
       if (access(cmd, X_OK) == 0) {
@@ -132,27 +131,12 @@ int help_function() {
   return 1;
 }
 
+char *builtin_dict[] = {"cd", "exit", "help"};
 int (*builtin_func[])(char **) = {
     &cd_function,
     &exit_function,
     &help_function,
 };
-
-int batch_mode(int argc, char *argv[]) {
-  if (argc == 2) {
-
-    printf("the batch file is : %s \n", argv[1]);
-    return 0;
-
-  } else if (argc > 2) {
-
-    printf("Throw an error because we only require one input\n");
-    return 0;
-  }
-  return 0;
-}
-
-char *builtin_dict[] = {"cd", "exit", "help"};
 
 int run_builtins(char **args) {
 
@@ -162,6 +146,43 @@ int run_builtins(char **args) {
     }
   }
   return exevute(args);
+}
+
+int batch_mode(int argc, char *argv[]) {
+  if (argc == 2) {
+    FILE *file = fopen(argv[1], "r");
+    if (file == NULL) {
+      perror("File does not exist\n");
+      exit(EXIT_FAILURE);
+    }
+
+    char *line = NULL;
+    size_t len = 0;
+    int status = 1; // Set status to 1 initially to continue the loop
+
+    while (getline(&line, &len, file) != -1 && status) {
+      char **args = split_input(line);
+
+      if (args[0] == NULL) {
+        free(args);
+        continue;
+      }
+
+      printf("Executing command: %s\n", args[0]);
+
+      status = run_builtins(args);
+
+      free(args);
+    }
+
+    free(line);
+    fclose(file);
+
+  } else if (argc > 2) {
+    printf("Error: Only one input file is allowed\n");
+    return 0;
+  }
+  return 0;
 }
 
 void interactive_mode() {
@@ -198,27 +219,17 @@ void interactive_mode() {
   }
 }
 
-// void interactive_mode() {
-//   char *input;
-//   char **args;
-//   int status = 1;
-//
-//   while (status) {
-//     printf("witsshell> ");
-//     input = get_input();
-//     args = split_input(input); // corr
-//     status = run_builtins(args);
-//
-//     free(args);
-//     free(input);
-//   }
-// }
-
 /* =============================== main ===================================*/
 
 int main(int argc, char *argv[]) {
 
-  batch_mode(argc, argv);
+  if (argc == 2) {
+    batch_mode(argc, argv);
+    return 0;
+  } else if (argc > 2) {
+    printf("Throw an error because we only require one input\n");
+    return 0;
+  }
   interactive_mode();
 
   return 0;

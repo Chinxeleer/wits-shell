@@ -1,2 +1,6 @@
-the batch file is : tests/7.in 
-witsshell> 
+tester
+tests
+tests-out
+test-witsshell.sh
+witsshell
+witsshell.c

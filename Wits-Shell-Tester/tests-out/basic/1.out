@@ -1,10 +1,6 @@
-the batch file is : tests/basic/1.in 
-witsshell> Makefile
-README.md
-shell.c
-shellv2.c
+tester
+tests
+tests-out
+test-witsshell.sh
 witsshell
-WitsShell-Project.tar.gz
-Wits-Shell-Tester
-yazi
-witsshell> 
+witsshell.c
