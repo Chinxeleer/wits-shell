@@ -41,36 +41,21 @@ char **path_list(char **patharg) {
     }
   } else {
     path_dict[0] = NULL;
-    // // Case 2: Fallback to the PATH environment variable
-    // char *path_env = getenv("PATH");
-    // if (path_env == NULL) {
-    //   // Fallback in case PATH is not set
-    //   path_env = "";
-    // }
-    //
-    // char *path_copy = strdup(path_env);   // Make a copy of the PATH
-    // char *token = strtok(path_copy, ":"); // Tokenize the PATH
-    //
-    // while (token != NULL && i < MAX_TOKENS - 1) {
-    //   path_dict[i] = strdup(token); // Copy the token to path_dict
-    //   i++;
-    //   token = strtok(NULL, ":");
-    // }
-    // free(path_copy); // Free the copy after tokenizing
   }
 
   path_dict[i] = NULL; // Null-terminate the array
   return path_dict;
 }
 
-int exevute(char **args, char **patharg, char *output_file) {
+int exevute(char **args, char **path, char *output_file) {
   pid_t pid;
   int status;
-  char **path = path_list(patharg);
+  char **cmd_path = path_list(path);
+
   pid = fork();
 
   if (pid == 0) {
-
+    // Child process
     if (output_file != NULL) {
       // Open the output file, overwrite if it exists, create if it doesn't
       int fd = open(output_file, O_WRONLY | O_CREAT | O_TRUNC, 0644);
@@ -80,26 +65,37 @@ int exevute(char **args, char **patharg, char *output_file) {
       }
 
       // Redirect both stdout and stderr to the file
-      dup2(fd, STDOUT_FILENO); // Redirect stdout
-      dup2(fd, STDERR_FILENO); // Redirect stderr
-      close(fd);               // Close file descriptor after redirection
+      if (dup2(fd, STDOUT_FILENO) < 0) { // Redirect stdout to file
+        perror("dup2 stdout");
+        exit(EXIT_FAILURE);
+      }
+      if (dup2(fd, STDERR_FILENO) < 0) { // Redirect stderr to file
+        perror("dup2 stderr");
+        exit(EXIT_FAILURE);
+      }
+      close(fd); // Close the file descriptor after redirection
     }
 
-    // Child process
-    for (int i = 0; path[i] != NULL; i++) {
-      char *cmd = malloc(strlen(path[i]) + strlen(args[0]) + 2); // +2 for '/'
-      sprintf(cmd, "%s/%s", path[i], args[0]);
-
+    // Try to execute the command using each path from `cmd_path`
+    for (int i = 0; cmd_path[i] != NULL; i++) {
+      char *cmd = malloc(strlen(cmd_path[i]) + strlen(args[0]) +
+                         2); // +2 for '/' and null terminator
+      sprintf(cmd, "%s/%s", cmd_path[i], args[0]);
       if (access(cmd, X_OK) == 0) {
         execv(cmd, args);
+        perror("execv failed");
+        free(cmd);
+        exit(EXIT_FAILURE);
       }
 
       free(cmd);
     }
-    // If we failed to exec a command, print error message and exit
+
+    // If we reached here, the command was not found
     char error_message[30] = "An error has occurred\n";
     write(STDERR_FILENO, error_message, strlen(error_message));
     exit(EXIT_FAILURE);
+
   } else {
     // Parent process
     do {
@@ -115,22 +111,74 @@ char **split_input(char *line) {
   int position = 0;
 
   if (!tokens) {
-    fprintf(stderr, "allocation error\n");
+    char error_message[30] = "An error has occurred\n";
+    write(STDERR_FILENO, error_message, strlen(error_message));
+
     exit(EXIT_FAILURE);
   }
 
-  // Use strsep to tokenize the input based on space (" ")
   while ((token = strsep(&line, DELIM)) != NULL) {
-    if (*token == '\0') { // Skip empty tokens
-      continue;
+    if (*token == '\0') {
+      continue; // Skip empty tokens
     }
-    tokens[position] = token;
-    position++;
+
+    // Check if the token contains '>'
+    char *redirect_ptr = strchr(token, '>');
+    if (redirect_ptr != NULL) {
+      // Handle case where '>' is inside the token
+      if (redirect_ptr == token) {
+        // '>' cannot be the first character in the command
+        if (position == 0) {
+          char error_message[30] = "An error has occurred\n";
+          write(STDERR_FILENO, error_message, strlen(error_message));
+
+          free(tokens);
+          return NULL; // Signal an error
+        }
+      }
+
+      // Split the token into two parts: before and after the '>'
+      if (redirect_ptr != token) {
+        // First, add the part before '>'
+        tokens[position++] = strndup(token, redirect_ptr - token);
+      }
+      // Then, add the '>' symbol itself
+      tokens[position++] = strdup(">");
+
+      // If there's anything after '>', add that as a separate token
+      if (*(redirect_ptr + 1) != '\0') {
+        tokens[position++] = strdup(redirect_ptr + 1);
+      }
+    } else {
+      // No '>' in the token, just add it as is
+      tokens[position++] = token;
+    }
 
     if (position >= MAX_TOKENS - 1) {
       break; // Stop if we've reached the maximum number of tokens
     }
   }
+
+  // Additional validation for incorrect usage of `>` redirection
+  for (int i = 0; i < position; i++) {
+    if (strcmp(tokens[i], ">") == 0) {
+      // Check if `>` is the first token or the last token
+      if (i == 0 || tokens[i + 1] == NULL) {
+        char error_message[30] = "An error has occurred\n";
+        write(STDERR_FILENO, error_message, strlen(error_message));
+        free(tokens);
+        return NULL; // Signal an error
+      }
+      // Check if multiple `>` are used without a command in between
+      if (i > 0 && strcmp(tokens[i - 1], ">") == 0) {
+        char error_message[30] = "An error has occurred\n";
+        write(STDERR_FILENO, error_message, strlen(error_message));
+        free(tokens);
+        return NULL; // Signal an error
+      }
+    }
+  }
+
   tokens[position] = NULL; // Null-terminate the array
   return tokens;
 }
@@ -231,7 +279,8 @@ int batch_mode(int argc, char *argv[], char ***official_path) {
   if (argc == 2) {
     FILE *file = fopen(argv[1], "r");
     if (file == NULL) {
-      perror("File does not exist\n");
+      char error_message[30] = "An error has occurred\n";
+      write(STDERR_FILENO, error_message, strlen(error_message));
       exit(EXIT_FAILURE);
     }
 
@@ -242,19 +291,24 @@ int batch_mode(int argc, char *argv[], char ***official_path) {
     while (getline(&line, &len, file) != -1 && status) {
       char **args = split_input(line);
 
-      if (args[0] == NULL) {
-        free(args);
-        continue;
+      // if (args[0] == NULL) {
+      //   free(args);
+      //   continue;
+      // }
+      if (args != NULL && args[0] != NULL) {
+        status = run_builtins(args, official_path);
       }
-
-      status = run_builtins(args, official_path);
       free(args);
+
+      // status = run_builtins(args, official_path);
+      // free(args);
     }
 
     free(line);
     fclose(file);
   } else if (argc > 2) {
-    printf("Error: Only one input file is allowed\n");
+    char error_message[30] = "An error has occurred\n";
+    write(STDERR_FILENO, error_message, strlen(error_message));
     return 0;
   }
   return 0;
@@ -282,8 +336,11 @@ void interactive_mode(char ***official_path) {
 
       if (strlen(command) > 0) {
         args = split_input(command);
-        status = run_builtins(args, official_path);
-        free(args);
+
+        if (args != NULL) {
+          status = run_builtins(args, official_path);
+          free(args);
+        }
       }
       command = strtok(NULL, "\n");
     }
@@ -300,7 +357,9 @@ int main(int argc, char *argv[]) {
   if (argc == 2) {
     batch_mode(argc, argv, &official_path);
   } else if (argc > 2) {
-    printf("Error: Only one input file is allowed\n");
+    char error_message[30] = "An error has occurred\n";
+    write(STDERR_FILENO, error_message, strlen(error_message));
+
     return 0;
   } else {
     interactive_mode(&official_path);
