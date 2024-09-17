@@ -291,10 +291,6 @@ int batch_mode(int argc, char *argv[], char ***official_path) {
     while (getline(&line, &len, file) != -1 && status) {
       char **args = split_input(line);
 
-      // if (args[0] == NULL) {
-      //   free(args);
-      //   continue;
-      // }
       if (args != NULL && args[0] != NULL) {
         status = run_builtins(args, official_path);
       }
@@ -344,6 +340,7 @@ void interactive_mode(char ***official_path) {
       }
       command = strtok(NULL, "\n");
     }
+
     free(input);
   }
 }
