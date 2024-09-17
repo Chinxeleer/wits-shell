@@ -9,6 +9,8 @@
 #define DELIM " \t\n\r\a"
 #define MAX_TOKENS 64
 
+// ----------------- Function Declarations -----------------
+
 char *get_input() {
   char *input = NULL;
   size_t len = 0;
@@ -237,82 +239,201 @@ char **path_function(char **args) {
   return path;
 }
 
-int run_builtins(char **args, char ***path) {
-  char *output_file = NULL;
-  int i = 0;
+int execute_parallel(char ***commands, char **path) {
+  int num_commands = 0;
+  pid_t *pids = NULL;
 
-  while (args[i] != NULL) {
+  // Count the number of commands
+  while (commands[num_commands] != NULL) {
+    num_commands++;
+  }
+
+  // Allocate memory for pid array
+  pids = malloc(num_commands * sizeof(pid_t));
+  if (pids == NULL) {
+    perror("malloc");
+    exit(EXIT_FAILURE);
+  }
+
+  // Execute each command in parallel
+  for (int i = 0; i < num_commands; i++) {
+    pids[i] = fork();
+    if (pids[i] == 0) {
+      // Child process
+      exevute(commands[i], path, NULL);
+      exit(EXIT_FAILURE); // If exevute returns, it's an error
+    } else if (pids[i] < 0) {
+      perror("fork");
+      exit(EXIT_FAILURE);
+    }
+  }
+
+  // Wait for all child processes to complete
+  for (int i = 0; i < num_commands; i++) {
+    int status;
+    waitpid(pids[i], &status, 0);
+  }
+
+  free(pids);
+  return 1;
+}
+
+char *insert_spaces_around_ampersand(char *line) {
+  char *new_line =
+      malloc(strlen(line) * 2); // Allocate a buffer that's large enough
+  if (new_line == NULL) {
+    perror("malloc failed");
+    exit(EXIT_FAILURE);
+  }
+  int j = 0;
+  for (int i = 0; line[i] != '\0'; i++) {
+    if (line[i] == '&') {
+      // Insert space before and after &
+      if (j > 0 && new_line[j - 1] != ' ') {
+        new_line[j++] = ' ';
+      }
+      new_line[j++] = '&';
+      if (line[i + 1] != ' ') {
+        new_line[j++] = ' ';
+      }
+    } else {
+      new_line[j++] = line[i];
+    }
+  }
+  new_line[j] = '\0';
+  return new_line;
+}
+
+char ***split_parallel_commands(char *raw_input) {
+  char *input = insert_spaces_around_ampersand(raw_input);
+  char ***commands = malloc(MAX_TOKENS * sizeof(char **));
+  char **tokens = split_input(input);
+  int command_index = 0;
+  // int token_index = 0;
+
+  commands[0] = malloc(MAX_TOKENS * sizeof(char *));
+  int current_command_token = 0;
+
+  for (int i = 0; tokens[i] != NULL; i++) {
+    if (strcmp(tokens[i], "&") == 0) {
+      commands[command_index][current_command_token] = NULL;
+      command_index++;
+      commands[command_index] = malloc(MAX_TOKENS * sizeof(char *));
+      current_command_token = 0;
+    } else {
+      commands[command_index][current_command_token] = strdup(tokens[i]);
+      current_command_token++;
+    }
+  }
+
+  commands[command_index][current_command_token] = NULL;
+  commands[command_index + 1] = NULL;
+
+  free(tokens);
+  return commands;
+}
+
+int run_builtins(char *input, char ***path) {
+  // Check if the input contains the '&' operator
+  if (strchr(input, '&') != NULL) {
+    // Split and execute parallel commands
+    char ***parallel_commands = split_parallel_commands(input);
+    return execute_parallel(parallel_commands, *path);
+  }
+
+  // Otherwise, process single command
+  char **args = split_input(input);
+  if (!args || !args[0]) {
+    // No command found
+    if (args)
+      free(args);
+    return 1;
+  }
+
+  // Check for '>'
+  char *output_file = NULL;
+  for (int i = 0; args[i] != NULL; i++) {
     if (strcmp(args[i], ">") == 0) {
+      // Handle redirection
       if (args[i + 1] == NULL || args[i + 2] != NULL) {
         char error_message[30] = "An error has occurred\n";
         write(STDERR_FILENO, error_message, strlen(error_message));
-
-        // Error: no file or too many arguments after '>'
+        free(args);
         return 1;
       }
-      output_file = args[i + 1]; // File to redirect output
-      args[i] = NULL;            // Terminate the command arguments at '>'
+      output_file = args[i + 1];
+      args[i] = NULL; // Terminate command before '>'
       break;
     }
-    i++;
   }
 
+  // Handle built-in commands
   if (strcmp(args[0], "cd") == 0) {
-    return cd_function(args);
+    cd_function(args);
   } else if (strcmp(args[0], "exit") == 0) {
-    return exit_function(args);
+    exit_function(args);
   } else if (strcmp(args[0], "path") == 0) {
-    if (*path != NULL) {
+    if (*path) {
       for (int i = 0; (*path)[i] != NULL; i++) {
         free((*path)[i]);
       }
       free(*path);
     }
     *path = path_function(args);
-    return 1;
+  } else {
+    // Execute external command
+    exevute(args, *path, output_file);
   }
 
-  return exevute(args, *path, output_file);
+  free(args);
+  return 1;
 }
 
+// ----------------- Modes Declarations -----------------
+
 int batch_mode(int argc, char *argv[], char ***official_path) {
-  if (argc == 2) {
-    FILE *file = fopen(argv[1], "r");
-    if (file == NULL) {
-      char error_message[30] = "An error has occurred\n";
-      write(STDERR_FILENO, error_message, strlen(error_message));
-      exit(EXIT_FAILURE);
-    }
-
-    char *line = NULL;
-    size_t len = 0;
-    int status = 1;
-
-    while (getline(&line, &len, file) != -1 && status) {
-      char **args = split_input(line);
-
-      if (args != NULL && args[0] != NULL) {
-        status = run_builtins(args, official_path);
-      }
-      free(args);
-
-      // status = run_builtins(args, official_path);
-      // free(args);
-    }
-
-    free(line);
-    fclose(file);
-  } else if (argc > 2) {
+  if (argc != 2) {
     char error_message[30] = "An error has occurred\n";
     write(STDERR_FILENO, error_message, strlen(error_message));
-    return 0;
+    exit(EXIT_FAILURE);
   }
+
+  // Open the file
+  FILE *file = fopen(argv[1], "r");
+  if (file == NULL) {
+    char error_message[30] = "An error has occurred\n";
+    write(STDERR_FILENO, error_message, strlen(error_message));
+    exit(EXIT_FAILURE);
+  }
+
+  char *line = NULL;
+  size_t len = 0;
+  ssize_t read;
+  int status = 1;
+
+  // Read each line from the file
+  while ((read = getline(&line, &len, file)) != -1 && status) {
+    // Trim leading/trailing spaces
+    while (*line == ' ')
+      line++;
+    char *end = line + strlen(line) - 1;
+    while (end > line && *end == ' ')
+      end--;
+    *(end + 1) = '\0';
+
+    if (strlen(line) > 0) {
+      // Run the command or parallel commands
+      status = run_builtins(line, official_path);
+    }
+  }
+
+  free(line);
+  fclose(file);
   return 0;
 }
 
 void interactive_mode(char ***official_path) {
   char *input;
-  char **args;
   int status = 1;
 
   while (status) {
@@ -320,25 +441,17 @@ void interactive_mode(char ***official_path) {
     fflush(stdout);
     input = get_input();
 
-    // Split input by '\n' to handle multiple commands in a single input
-    char *command = strtok(input, "\n");
-    while (command != NULL) {
-      while (*command == ' ')
-        command++;
-      char *end = command + strlen(command) - 1;
-      while (end > command && *end == ' ')
-        end--;
-      *(end + 1) = '\0';
+    // Trim leading/trailing spaces
+    while (*input == ' ')
+      input++;
+    char *end = input + strlen(input) - 1;
+    while (end > input && *end == ' ')
+      end--;
+    *(end + 1) = '\0';
 
-      if (strlen(command) > 0) {
-        args = split_input(command);
-
-        if (args != NULL) {
-          status = run_builtins(args, official_path);
-          free(args);
-        }
-      }
-      command = strtok(NULL, "\n");
+    if (strlen(input) > 0) {
+      // Run the command or parallel commands
+      status = run_builtins(input, official_path);
     }
 
     free(input);
@@ -356,8 +469,7 @@ int main(int argc, char *argv[]) {
   } else if (argc > 2) {
     char error_message[30] = "An error has occurred\n";
     write(STDERR_FILENO, error_message, strlen(error_message));
-
-    return 0;
+    return 1;
   } else {
     interactive_mode(&official_path);
   }
